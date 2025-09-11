@@ -1,0 +1,24 @@
+As part of the first round of Selection Process, you are required to complete the following task (it is representative of the type of projects you will be working on).
+
+You need to write python script to automatically download judgments pdfs from Rajasthan High Court (https://hcraj.nic.in/cishcraj-jdp/JudgementFilters/) along with the displayed information in the table from last 10 days, incrementally daily(explained below).
+
+
+The only input you need to give is "From Date", "To Date", "Reportable Judgment" and Captcha. In our case From Date will be 10 days earlier from today, and To Date will be today, set Reportable Judgment to YES.
+
+What is meant by downloading judgments incrementally daily?
+
+Suppose you start your script for the first time on 13 August, then your script will be downloading all judgments from 3 august to 13 august. Now if you run this script again on 14 August, then the script should only download the new judgments that had not been downloaded already by your script before. This would include judgments of 14th August and any other judgment from date 4th to 13th that was uploaded later on after we ran our script for the first time on 13th.
+
+Your script should return the following output - 
+A CSV file along with all the relevant information displayed on the website(reference image below),
+and a pdf name column which refers to the downloaded pdf judgments for a particular row.
+
+
+Preferably provide a kaggle or colab notebook to test your script.
+
+
+
+BONUS POINTS - Write a script capable of solving captcha for this website
+https://www.sci.gov.in/judgements-judgement-date/
+
+Note - Captcha solving should be completely offline, use only local ML models, if required. Do not use LLM API calls for this. 

@@ -2,6 +2,7 @@
 """
 Fixed Rajasthan High Court Judgment Scraper
 Handles the current website structure and fixes captcha detection issues
+Optimized for performance and reliability
 """
 
 import os
@@ -10,9 +11,11 @@ import json
 import time
 import hashlib
 import requests
+import logging
+import concurrent.futures
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any, Union
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -23,6 +26,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import (TimeoutException, NoSuchElementException, 
+                                       StaleElementReferenceException, WebDriverException)
 from webdriver_manager.chrome import ChromeDriverManager
 import cv2
 import numpy as np
@@ -30,23 +35,43 @@ from PIL import Image
 import warnings
 warnings.filterwarnings('ignore')
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("rajasthan_hc_scraper.log"),
+        logging.StreamHandler()
+    ]
+)
+
 # Try to import pytesseract with error handling
 try:
     import pytesseract
-    # For Windows users, uncomment and set the correct path:
-    # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    # For Windows users, set the correct path if it exists
+    if os.name == 'nt' and os.path.exists(r'C:\Program Files\Tesseract-OCR\tesseract.exe'):
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
     TESSERACT_AVAILABLE = True
 except ImportError:
-    print("Warning: Tesseract not available. Captcha solving will be manual.")
+    logging.warning("Tesseract not available. Captcha solving will be manual.")
     TESSERACT_AVAILABLE = False
 
+# Try to import the advanced captcha solver
+try:
+    from Advanced_OCR_Captcha_Solver import AdvancedCaptchaOCR
+    ADVANCED_OCR_AVAILABLE = True
+except ImportError:
+    ADVANCED_OCR_AVAILABLE = False
+
 class FixedRajasthanHCScraper:
-    def __init__(self, download_dir: str = "rajasthan_hc_judgments"):
+    def __init__(self, download_dir: str = "rajasthan_hc_judgments", headless: bool = False, debug: bool = False):
         self.base_url = "https://hcraj.nic.in/cishcraj-jdp/JudgementFilters/"
         self.download_dir = Path(download_dir)
         self.pdf_dir = self.download_dir / "pdfs"
         self.csv_file = self.download_dir / "judgments.csv"
         self.state_file = self.download_dir / "scraper_state.json"
+        self.debug = debug
+        self.logger = logging.getLogger('RajasthanHCScraper')
         
         # Create directories
         self.download_dir.mkdir(exist_ok=True)
@@ -57,22 +82,50 @@ class FixedRajasthanHCScraper:
         
         # Setup Chrome options
         self.chrome_options = Options()
-        # Comment out headless mode for debugging
-        # self.chrome_options.add_argument("--headless")
+        if headless:
+            self.chrome_options.add_argument("--headless=new")
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--disable-gpu")
         self.chrome_options.add_argument("--window-size=1920,1080")
         self.chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
+        # Performance optimizations
+        self.chrome_options.add_argument("--disable-extensions")
+        self.chrome_options.add_argument("--disable-infobars")
+        self.chrome_options.add_argument("--disable-notifications")
+        self.chrome_options.add_argument("--disable-popup-blocking")
+        
         # Set download preferences
         prefs = {
             "download.default_directory": str(self.pdf_dir.absolute()),
             "download.prompt_for_download": False,
             "plugins.always_open_pdf_externally": True,
-            "profile.default_content_settings.popups": 0
+            "profile.default_content_settings.popups": 0,
+            "safebrowsing.enabled": False  # Disable safe browsing checks for faster downloads
         }
         self.chrome_options.add_experimental_option("prefs", prefs)
+        
+        # Initialize captcha solver
+        if ADVANCED_OCR_AVAILABLE:
+            self.captcha_solver = AdvancedCaptchaOCR(debug_mode=debug)
+            self.logger.info("Using Advanced OCR Captcha Solver")
+        else:
+            self.captcha_solver = None
+            self.logger.warning("Advanced OCR Captcha Solver not available")
+            
+        # Performance metrics
+        self.metrics = {
+            "start_time": None,
+            "end_time": None,
+            "total_judgments": 0,
+            "new_judgments": 0,
+            "captcha_attempts": 0,
+            "captcha_success": 0,
+            "download_success": 0,
+            "download_failed": 0,
+            "errors": 0
+        }
         
     def load_state(self) -> Dict:
         """Load previously downloaded judgment IDs and metadata"""
@@ -81,9 +134,11 @@ class FixedRajasthanHCScraper:
                 with open(self.state_file, 'r') as f:
                     state = json.load(f)
                     state["downloaded_ids"] = set(state.get("downloaded_ids", []))
+                    self.logger.info(f"Loaded state with {len(state['downloaded_ids'])} previously downloaded judgments")
                     return state
             except Exception as e:
-                print(f"Error loading state: {e}")
+                self.logger.error(f"Error loading state: {e}", exc_info=True)
+        self.logger.info("No previous state found, starting fresh")
         return {"downloaded_ids": set(), "last_run_date": None}
     
     def save_state(self):
@@ -92,16 +147,29 @@ class FixedRajasthanHCScraper:
             "downloaded_ids": list(self.downloaded_judgments["downloaded_ids"]),
             "last_run_date": self.downloaded_judgments["last_run_date"]
         }
-        with open(self.state_file, 'w') as f:
-            json.dump(state_to_save, f, indent=2)
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(state_to_save, f, indent=2)
+            self.logger.info(f"Saved state with {len(self.downloaded_judgments['downloaded_ids'])} downloaded judgments")
+        except Exception as e:
+            self.logger.error(f"Error saving state: {e}", exc_info=True)
     
     def generate_judgment_id(self, judgment_data: Dict) -> str:
         """Generate unique ID for judgment based on key fields"""
         # Use multiple fields to create a more unique ID
         id_parts = []
-        for key, value in list(judgment_data.items())[:5]:  # First 5 fields
-            if value and str(value).strip():
-                id_parts.append(str(value).strip())
+        key_fields = ['case_number', 'petitioner', 'respondent', 'judgment_date', 'judge_name']
+        
+        # Prioritize specific key fields if available
+        for key in key_fields:
+            if key in judgment_data and judgment_data[key] and str(judgment_data[key]).strip():
+                id_parts.append(str(judgment_data[key]).strip())
+        
+        # If we don't have enough key fields, use the first 5 available fields
+        if len(id_parts) < 3:
+            for key, value in list(judgment_data.items())[:5]:  # First 5 fields
+                if value and str(value).strip() and str(value).strip() not in id_parts:
+                    id_parts.append(str(value).strip())
         
         id_string = "|".join(id_parts) if id_parts else str(hash(str(judgment_data)))
         return hashlib.md5(id_string.encode()).hexdigest()
@@ -268,8 +336,15 @@ class FixedRajasthanHCScraper:
         Returns:
             str: The solved captcha text or empty string if failed
         """
+        self.metrics["captcha_attempts"] += 1
+        
+        # Use the advanced captcha solver if available
+        if ADVANCED_OCR_AVAILABLE and self.captcha_solver:
+            self.logger.info("Using Advanced OCR Captcha Solver")
+            return self._solve_with_advanced_ocr(driver, attempt)
+            
         if not TESSERACT_AVAILABLE:
-            print("Tesseract OCR not available")
+            self.logger.warning("Tesseract OCR not available")
             return ""
         
         try:
@@ -549,12 +624,18 @@ class FixedRajasthanHCScraper:
                 if attempt > 0:
                     try:
                         # Look for captcha refresh button with multiple selectors
+                        refresh_button = None
+                        for selector in ["btnRefresh", "refresh", "captchaRefresh"]:
+                            try:
+                                refresh_button = driver.find_element(By.ID, selector)
+                                break
+                            except NoSuchElementException:
+                                continue
+                        
+                        if refresh_button:
+                            refresh_button.click()
+                            time.sleep(1)
                     except Exception as e:
-                        print(f"Error refreshing captcha: {e}")
-                        # Look for captcha refresh button with multiple selectors
-                except Exception as e:
-                    print(f"Error taking screenshot: {e}")
-                    return ""
                         print(f"Error refreshing captcha: {e}")
                         # Look for captcha refresh button with multiple selectors
                         refresh_selectors = [
@@ -582,6 +663,8 @@ class FixedRajasthanHCScraper:
                                     break
                             except:
                                 continue
+                        if not refresh_clicked:
+                            # Try alternative selectors
                             refresh_selectors = [
                                 "//img[contains(@src, 'refresh')]",
                                 "//img[contains(@title, 'refresh')]",
@@ -591,45 +674,47 @@ class FixedRajasthanHCScraper:
                             ]
                             
                             for selector in refresh_selectors:
-                                refresh_buttons = driver.find_elements(By.XPATH, selector)
-                                if refresh_buttons:
-                                    refresh_buttons[0].click()
-                                    print(f"Refreshed captcha on attempt {attempt+1}")
-                                    time.sleep(1)  # Wait for new captcha to load
-                                    break
-                        except Exception as e:
-                            print(f"Could not refresh captcha: {e}")
+                                try:
+                                    refresh_buttons = driver.find_elements(By.XPATH, selector)
+                                    if refresh_buttons:
+                                        refresh_buttons[0].click()
+                                        print(f"Refreshed captcha on attempt {attempt+1}")
+                                        time.sleep(1)  # Wait for new captcha to load
+                                        break
+                                except Exception as e:
+                                    print(f"Could not refresh captcha with selector {selector}: {e}")
                     
                     # Try OCR with the current attempt number
-                    ocr_result = self.solve_captcha_ocr(driver, attempt)
-                    
-                    # Clean up the result - remove non-alphanumeric characters
-                    if ocr_result:
-                        ocr_result = ''.join(c for c in ocr_result if c.isalnum())
-                    
-                    # Validate captcha text format
-                    if ocr_result and 4 <= len(ocr_result) <= 8:
-                        # Check if it has a good mix of characters (most captchas do)
-                        has_letters = any(c.isalpha() for c in ocr_result)
-                        has_numbers = any(c.isdigit() for c in ocr_result)
+                    try:
+                        ocr_result = self.solve_captcha_ocr(driver, attempt)
                         
-                        # Add to results list for consistency checking
-                        captcha_results.append(ocr_result)
+                        # Clean up the result - remove non-alphanumeric characters
+                        if ocr_result:
+                            ocr_result = ''.join(c for c in ocr_result if c.isalnum())
                         
-                        # Most captchas have both letters and numbers
-                        if has_letters and has_numbers:
-                            print(f"Solved captcha automatically (attempt {attempt+1}): {ocr_result}")
-                            return ocr_result
-                        else:
-                            print(f"Captcha text format suspicious (attempt {attempt+1}): {ocr_result}")
+                        # Validate captcha text format
+                        if ocr_result and 4 <= len(ocr_result) <= 8:
+                            # Check if it has a good mix of characters (most captchas do)
+                            has_letters = any(c.isalpha() for c in ocr_result)
+                            has_numbers = any(c.isdigit() for c in ocr_result)
                             
-                            # If we've seen this result multiple times, it might be correct despite format
-                            if captcha_results.count(ocr_result) >= 2:
-                                print(f"Using consistent captcha result: {ocr_result}")
+                            # Add to results list for consistency checking
+                            captcha_results.append(ocr_result)
+                            
+                            # Most captchas have both letters and numbers
+                            if has_letters and has_numbers:
+                                print(f"Solved captcha automatically (attempt {attempt+1}): {ocr_result}")
                                 return ocr_result
-                except Exception as e:
-                    print(f"OCR attempt {attempt+1} failed: {e}")
-                    time.sleep(1)  # Brief pause before next attempt
+                            else:
+                                print(f"Captcha text format suspicious (attempt {attempt+1}): {ocr_result}")
+                                
+                                # If we've seen this result multiple times, it might be correct despite format
+                                if captcha_results.count(ocr_result) >= 2:
+                                    print(f"Using consistent captcha result: {ocr_result}")
+                                    return ocr_result
+                    except Exception as e:
+                        print(f"OCR attempt {attempt+1} failed: {e}")
+                        time.sleep(1)  # Brief pause before next attempt
             
             # Check if we have any consistent results before falling back to manual
             if captcha_results:
@@ -697,7 +782,7 @@ class FixedRajasthanHCScraper:
                 time.sleep(1)
         return False
     
-    def navigate_to_search_form(self, driver webdriver.Chrome) -> bool:
+    def navigate_to_search_form(self, driver: webdriver.Chrome) -> bool:
         """Navigate to the search form"""
         try:
             print("Loading main page...")
@@ -1142,39 +1227,66 @@ class FixedRajasthanHCScraper:
             return False
     
     def extract_judgment_data(self, driver: webdriver.Chrome) -> List[Dict]:
-        """Extract judgment data from results"""
+        """Extract judgment data from results with optimized performance"""
         judgments = []
+        start_time = time.time()
         
         try:
-            print("Extracting judgment data...")
+            self.logger.info("Extracting judgment data...")
             
-            # Wait a bit for results to load
-            time.sleep(3)
+            # Use shorter wait time with explicit wait instead of sleep
+            try:
+                WebDriverWait(driver, 2).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "table"))
+                )
+            except TimeoutException:
+                self.logger.warning("No tables found after waiting, continuing anyway")
             
             # Look for results table
             tables = driver.find_elements(By.TAG_NAME, "table")
-            print(f"Found {len(tables)} tables on page")
+            self.logger.info(f"Found {len(tables)} tables on page")
             
             results_table = None
-            for i, table in enumerate(tables):
-                table_text = table.text.lower()
-                print(f"Table {i+1} preview: {table_text[:100]}...")
+            # Use parallel processing to analyze tables if there are many
+            if len(tables) > 5:
+                # Define a function to check if a table contains judgment data
+                def is_judgment_table(table_idx):
+                    table = tables[table_idx]
+                    table_text = table.text.lower()
+                    return any(keyword in table_text for keyword in ["s.no", "case", "judgment", "date", "party", "serial"]), table_idx
                 
-                # Look for table with judgment data
-                if any(keyword in table_text for keyword in ["s.no", "case", "judgment", "date", "party", "serial"]):
-                    results_table = table
-                    print(f"Selected table {i+1} as results table")
-                    break
+                # Process tables in parallel
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tables), 5)) as executor:
+                    futures = [executor.submit(is_judgment_table, i) for i in range(len(tables))]
+                    for future in concurrent.futures.as_completed(futures):
+                        is_result_table, idx = future.result()
+                        if is_result_table:
+                            results_table = tables[idx]
+                            self.logger.info(f"Selected table {idx+1} as results table")
+                            break
+            else:
+                # Process sequentially for small number of tables
+                for i, table in enumerate(tables):
+                    table_text = table.text.lower()
+                    self.logger.debug(f"Table {i+1} preview: {table_text[:100]}...")
+                    
+                    # Look for table with judgment data
+                    if any(keyword in table_text for keyword in ["s.no", "case", "judgment", "date", "party", "serial"]):
+                        results_table = table
+                        self.logger.info(f"Selected table {i+1} as results table")
+                        break
             
             if not results_table:
-                print("No results table found")
+                self.logger.warning("No results table found")
                 # Try to find any structured data
                 rows = driver.find_elements(By.XPATH, "//tr[position()>1 and count(td)>2]")
                 if rows:
-                    print(f"Found {len(rows)} data rows without clear table structure")
-                    # Process rows without table structure
-                    for i, row in enumerate(rows):
+                    self.logger.info(f"Found {len(rows)} data rows without clear table structure")
+                    
+                    # Define a function to process a row without table structure
+                    def process_unstructured_row(row_idx):
                         try:
+                            row = rows[row_idx]
                             cells = row.find_elements(By.TAG_NAME, "td")
                             if len(cells) >= 3:  # At least 3 columns
                                 judgment_data = {}
@@ -1188,14 +1300,31 @@ class FixedRajasthanHCScraper:
                                 else:
                                     judgment_data['pdf_url'] = ""
                                 
-                                judgments.append(judgment_data)
+                                return judgment_data
+                            return None
                         except Exception as e:
-                            print(f"Error processing row {i}: {e}")
-                            continue
+                            self.logger.error(f"Error processing unstructured row {row_idx}: {str(e)}")
+                            return None
+                    
+                    # Process rows in parallel if there are many
+                    if len(rows) > 10:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(rows), 10)) as executor:
+                            futures = [executor.submit(process_unstructured_row, i) for i in range(len(rows))]
+                            for future in concurrent.futures.as_completed(futures):
+                                result = future.result()
+                                if result:
+                                    judgments.append(result)
+                    else:
+                        # Process sequentially for smaller sets
+                        for i in range(len(rows)):
+                            result = process_unstructured_row(i)
+                            if result:
+                                judgments.append(result)
                 
+                self.logger.info(f"Extracted {len(judgments)} judgments from unstructured data in {time.time() - start_time:.2f} seconds")
                 return judgments
             
-            # Extract headers
+            # Extract headers with better error handling
             headers = []
             try:
                 header_row = results_table.find_element(By.TAG_NAME, "tr")
@@ -1209,7 +1338,8 @@ class FixedRajasthanHCScraper:
                         header_text = f"Column_{len(headers)+1}"
                     headers.append(header_text)
                     
-            except:
+            except Exception as e:
+                self.logger.warning(f"Error extracting headers: {str(e)}")
                 headers = []
             
             if not headers:
@@ -1219,17 +1349,19 @@ class FixedRajasthanHCScraper:
                     cell_count = len(first_row.find_elements(By.TAG_NAME, "td"))
                     headers = [f"Column_{i+1}" for i in range(cell_count)]
             
-            print(f"Table headers: {headers}")
+            self.logger.info(f"Table headers: {headers}")
             
             # Extract data rows
             rows = results_table.find_elements(By.TAG_NAME, "tr")[1:]  # Skip header
-            print(f"Processing {len(rows)} data rows...")
+            self.logger.info(f"Processing {len(rows)} data rows...")
             
-            for i, row in enumerate(rows):
+            # Define a function to process a single row
+            def process_row(row_idx):
                 try:
+                    row = rows[row_idx]
                     cells = row.find_elements(By.TAG_NAME, "td")
                     if not cells:
-                        continue
+                        return None
                     
                     judgment_data = {}
                     for j, cell in enumerate(cells):
@@ -1237,72 +1369,122 @@ class FixedRajasthanHCScraper:
                         cell_text = cell.text.strip()
                         judgment_data[header_name] = cell_text
                     
-                    # Look for PDF download links
-                    pdf_links = row.find_elements(By.XPATH, ".//a[contains(@href, '.pdf') or contains(@href, 'download') or contains(text(), 'View') or contains(text(), 'Download')]")
-                    if pdf_links:
-                        judgment_data['pdf_url'] = pdf_links[0].get_attribute('href')
-                        print(f"Found PDF link for row {i+1}")
-                    else:
+                    # Look for PDF download links with optimized selector
+                    try:
+                        pdf_links = row.find_elements(By.XPATH, ".//a[contains(@href, '.pdf') or contains(@href, 'download') or contains(text(), 'View') or contains(text(), 'Download')]")
+                        if pdf_links:
+                            judgment_data['pdf_url'] = pdf_links[0].get_attribute('href')
+                            self.logger.debug(f"Found PDF link for row {row_idx+1}")
+                        else:
+                            judgment_data['pdf_url'] = ""
+                    except Exception as pdf_err:
+                        self.logger.warning(f"Error finding PDF link in row {row_idx+1}: {str(pdf_err)}")
                         judgment_data['pdf_url'] = ""
                     
-                    # Only add if we have meaningful data
+                    # Only return if we have meaningful data
                     if any(value and str(value).strip() for value in judgment_data.values() if value != judgment_data.get('pdf_url', '')):
-                        judgments.append(judgment_data)
+                        return judgment_data
+                    return None
                         
                 except Exception as e:
-                    print(f"Error processing row {i+1}: {e}")
-                    continue
+                    self.logger.error(f"Error processing row {row_idx+1}: {str(e)}")
+                    return None
             
-            print(f"Successfully extracted {len(judgments)} judgment records")
+            # Process rows in parallel for better performance
+            if len(rows) > 10:  # Use parallel processing for larger result sets
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(rows), 10)) as executor:
+                    futures = [executor.submit(process_row, i) for i in range(len(rows))]
+                    for future in concurrent.futures.as_completed(futures):
+                        result = future.result()
+                        if result:
+                            judgments.append(result)
+            else:  # Process sequentially for smaller result sets
+                for i in range(len(rows)):
+                    result = process_row(i)
+                    if result:
+                        judgments.append(result)
+            
+            elapsed_time = time.time() - start_time
+            self.logger.info(f"Successfully extracted {len(judgments)} judgment records in {elapsed_time:.2f} seconds")
             
             # Show sample of extracted data
             if judgments:
-                print("Sample judgment data:")
+                self.logger.info("Sample judgment data:")
                 sample = judgments[0]
                 for key, value in sample.items():
                     if value:
-                        print(f"  {key}: {str(value)[:50]}...")
+                        self.logger.info(f"  {key}: {str(value)[:50]}...")
+            
+            # Calculate and log performance metrics
+            if elapsed_time > 0 and len(judgments) > 0:
+                records_per_second = len(judgments) / elapsed_time
+                self.logger.info(f"Performance: {records_per_second:.2f} records/second")
             
             return judgments
             
         except Exception as e:
-            print(f"Error extracting judgment data: {e}")
+            self.logger.error(f"Error extracting judgment data: {str(e)}")
+            # Log stack trace for debugging
+            import traceback
+            self.logger.debug(f"Stack trace: {traceback.format_exc()}")
             return judgments
     
-    def download_pdf(self, url: str, filename: str) -> bool:
-        """Download PDF from URL"""
-        try:
-            print(f"Downloading: {filename}")
-            
-            headers = {
+    # Session cache for connection pooling
+    _session = None
+    
+    def _get_session(self):
+        """Get or create a requests session with proper headers for connection pooling"""
+        if self._session is None:
+            self._session = requests.Session()
+            self._session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'application/pdf,*/*',
                 'Referer': 'https://hcraj.nic.in/'
-            }
+            })
+        return self._session
+        
+    def download_pdf(self, url: str, filename: str) -> bool:
+        """Download PDF from URL with optimized connection reuse"""
+        start_time = time.time()
+        try:
+            self.logger.info(f"Downloading: {filename}")
             
-            response = requests.get(url, headers=headers, timeout=30, stream=True)
+            # Use persistent session for connection pooling
+            session = self._get_session()
+            
+            # Use stream=True for memory efficiency and shorter timeout
+            response = session.get(url, timeout=15, stream=True)
             response.raise_for_status()
             
             # Ensure it's actually a PDF
             content_type = response.headers.get('content-type', '').lower()
             if 'pdf' not in content_type and not url.lower().endswith('.pdf'):
-                print(f"Warning: URL may not be a PDF: {content_type}")
+                self.logger.warning(f"URL may not be a PDF: {content_type}")
             
             pdf_path = self.pdf_dir / filename
+            
+            # Use larger chunk size for faster downloads
             with open(pdf_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=16384):  # Increased chunk size
                     f.write(chunk)
             
             file_size = pdf_path.stat().st_size
             if file_size < 1024:  # Less than 1KB, likely an error page
-                print(f"Downloaded file is too small ({file_size} bytes), likely an error")
+                self.logger.warning(f"Downloaded file is too small ({file_size} bytes), likely an error")
                 return False
             
-            print(f"Successfully downloaded {filename} ({file_size} bytes)")
+            elapsed = time.time() - start_time
+            self.logger.info(f"Successfully downloaded {filename} ({file_size} bytes) in {elapsed:.2f}s")
             return True
             
+        except requests.exceptions.Timeout:
+            self.logger.error(f"Timeout downloading PDF {filename}")
+            return False
+        except requests.exceptions.ConnectionError:
+            self.logger.error(f"Connection error downloading PDF {filename}")
+            return False
         except Exception as e:
-            print(f"Error downloading PDF {filename}: {e}")
+            self.logger.error(f"Error downloading PDF {filename}: {e}", exc_info=True)
             return False
     
     def generate_pdf_filename(self, judgment_data: Dict) -> str:
@@ -1333,13 +1515,15 @@ class FixedRajasthanHCScraper:
         return safe_filename[:100]  # Limit length
     
     def scrape_judgments(self, from_date: str, to_date: str) -> List[Dict]:
-        """Main scraping function"""
-        print(f"Scraping judgments from {from_date} to {to_date}")
+        """Main scraping function with performance optimizations"""
+        self.metrics["start_time"] = time.time()
+        self.logger.info(f"Scraping judgments from {from_date} to {to_date}")
         
         try:
             driver = self.setup_driver()
         except Exception as e:
-            print(f"Failed to setup driver: {e}")
+            self.logger.error(f"Failed to setup driver: {e}", exc_info=True)
+            self.metrics["errors"] += 1
             return []
         
         all_judgments = []
@@ -1347,84 +1531,118 @@ class FixedRajasthanHCScraper:
         try:
             # Navigate to search form
             if not self.navigate_to_search_form(driver):
-                print("Could not navigate to search form")
+                self.logger.error("Could not navigate to search form")
+                self.metrics["errors"] += 1
                 return []
             
             # Fill and submit form
             if not self.fill_search_form(driver, from_date, to_date):
-                print("Could not fill and submit form")
+                self.logger.error("Could not fill and submit form")
+                self.metrics["errors"] += 1
                 return []
             
             # Extract results
             judgments = self.extract_judgment_data(driver)
             
             if not judgments:
-                print("No judgments found")
+                self.logger.info("No judgments found")
                 return []
             
-            print(f"Found {len(judgments)} judgments to process")
+            self.metrics["total_judgments"] = len(judgments)
+            self.logger.info(f"Found {len(judgments)} judgments to process")
             
-            # Process each judgment
-            for i, judgment in enumerate(judgments):
-                try:
+            # Process judgments in parallel
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # Prepare arguments for parallel processing
+                judgment_tasks = []
+                for judgment in judgments:
                     judgment_id = self.generate_judgment_id(judgment)
                     
                     # Skip if already downloaded
                     if judgment_id in self.downloaded_judgments["downloaded_ids"]:
                         case_ref = list(judgment.values())[0] if judgment else "Unknown"
-                        print(f"Skipping already downloaded: {case_ref[:50]}...")
+                        self.logger.debug(f"Skipping already downloaded: {case_ref[:50]}...")
                         continue
                     
-                    # Download PDF if URL exists
-                    pdf_filename = ""
-                    if judgment.get('pdf_url') and judgment['pdf_url'].strip():
-                        pdf_filename = self.generate_pdf_filename(judgment)
-                        
-                        # Ensure unique filename
-                        counter = 1
-                        original_filename = pdf_filename
-                        while (self.pdf_dir / pdf_filename).exists():
-                            name, ext = os.path.splitext(original_filename)
-                            pdf_filename = f"{name}_{counter}{ext}"
-                            counter += 1
-                        
-                        if self.download_pdf(judgment['pdf_url'], pdf_filename):
-                            judgment['pdf_filename'] = pdf_filename
-                            judgment['download_status'] = "Success"
-                        else:
-                            judgment['pdf_filename'] = "Download_Failed"
-                            judgment['download_status'] = "Failed"
-                    else:
-                        judgment['pdf_filename'] = "No_PDF_URL"
-                        judgment['download_status'] = "No_URL"
-                    
-                    # Add metadata
-                    judgment['scraped_date'] = datetime.now().isoformat()
                     judgment['judgment_id'] = judgment_id
-                    
-                    # Mark as processed
-                    self.downloaded_judgments["downloaded_ids"].add(judgment_id)
-                    all_judgments.append(judgment)
-                    
-                    print(f"Processed judgment {i+1}/{len(judgments)}: {judgment.get('pdf_filename', 'No PDF')}")
-                    
-                except Exception as e:
-                    print(f"Error processing judgment {i+1}: {e}")
-                    continue
+                    judgment_tasks.append(judgment)
+                
+                # Submit tasks to thread pool
+                futures = {executor.submit(self._process_judgment, judgment): judgment for judgment in judgment_tasks}
+                
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(futures):
+                    judgment = futures[future]
+                    try:
+                        processed_judgment = future.result()
+                        if processed_judgment:
+                            all_judgments.append(processed_judgment)
+                            # Mark as processed
+                            self.downloaded_judgments["downloaded_ids"].add(processed_judgment['judgment_id'])
+                            self.metrics["new_judgments"] += 1
+                            if processed_judgment.get('download_status') == "Success":
+                                self.metrics["download_success"] += 1
+                            elif processed_judgment.get('download_status') == "Failed":
+                                self.metrics["download_failed"] += 1
+                    except Exception as e:
+                        self.logger.error(f"Error processing judgment {judgment.get('judgment_id', 'unknown')}: {e}")
+                        self.metrics["errors"] += 1
         
         except Exception as e:
-            print(f"Error during scraping: {e}")
+            self.logger.error(f"Error during scraping: {e}", exc_info=True)
+            self.metrics["errors"] += 1
         
         finally:
             try:
                 driver.quit()
             except:
                 pass
+            
+            # Update metrics
+            self.metrics["end_time"] = time.time()
+            elapsed_time = self.metrics["end_time"] - self.metrics["start_time"]
+            self.logger.info(f"Scraping completed in {elapsed_time:.2f} seconds. Found {len(all_judgments)} new judgments.")
+            self.logger.info(f"Performance metrics: {self.metrics}")
         
         return all_judgments
+        
+    def _process_judgment(self, judgment: Dict) -> Dict:
+        """Process a single judgment (for parallel execution)"""
+        try:
+            # Download PDF if URL exists
+            pdf_filename = ""
+            if judgment.get('pdf_url') and judgment['pdf_url'].strip():
+                pdf_filename = self.generate_pdf_filename(judgment)
+                
+                # Ensure unique filename
+                counter = 1
+                original_filename = pdf_filename
+                while (self.pdf_dir / pdf_filename).exists():
+                    name, ext = os.path.splitext(original_filename)
+                    pdf_filename = f"{name}_{counter}{ext}"
+                    counter += 1
+                
+                if self.download_pdf(judgment['pdf_url'], pdf_filename):
+                    judgment['pdf_filename'] = pdf_filename
+                    judgment['download_status'] = "Success"
+                else:
+                    judgment['pdf_filename'] = "Download_Failed"
+                    judgment['download_status'] = "Failed"
+            else:
+                judgment['pdf_filename'] = "No_PDF_URL"
+                judgment['download_status'] = "No_URL"
+            
+            # Add metadata
+            judgment['scraped_date'] = datetime.now().isoformat()
+            
+            return judgment
+                
+        except Exception as e:
+            self.logger.error(f"Error in _process_judgment: {e}", exc_info=True)
+            return None
     
     def save_to_csv(self, judgments: List[Dict]):
-        """Save judgments to CSV file with all relevant information
+        """Save judgments to CSV file with all relevant information using optimized parallel processing
         
         The CSV includes the following columns:
         - judgment_id: Unique identifier for the judgment
@@ -1440,43 +1658,64 @@ class FixedRajasthanHCScraper:
         - scraped_date: Date and time when the judgment was scraped
         - file_size_kb: Size of the PDF file in KB
         """
+        start_time = time.time()
+        
         if not judgments:
-            print("No new judgments to save")
+            self.logger.info("No new judgments to save")
             return
         
-        # Add file size information to new judgments
-        for judgment in judgments:
-            # Add file size information if PDF exists
-            if judgment.get('pdf_path') and os.path.exists(judgment['pdf_path']):
-                try:
-                    file_size_bytes = os.path.getsize(judgment['pdf_path'])
-                    judgment['file_size_kb'] = round(file_size_bytes / 1024, 2)
-                except Exception as e:
-                    print(f"Error getting file size: {e}")
-                    judgment['file_size_kb'] = None
+        self.logger.info(f"Saving {len(judgments)} judgments to CSV")
         
-        # Load existing data
+        # Add file size information to new judgments in parallel
+        def get_file_size(judgment):
+            if judgment.get('pdf_filename') and not judgment.get('file_size_kb'):
+                pdf_path = self.pdf_dir / judgment['pdf_filename']
+                if pdf_path.exists():
+                    try:
+                        file_size_bytes = os.path.getsize(pdf_path)
+                        judgment['file_size_kb'] = round(file_size_bytes / 1024, 2)
+                    except Exception as e:
+                        self.logger.warning(f"Error getting file size for {judgment.get('pdf_filename')}: {str(e)}")
+                        judgment['file_size_kb'] = None
+            return judgment
+        
+        # Process file sizes in parallel for better performance
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(judgments), 20)) as executor:
+            processed_judgments = list(executor.map(get_file_size, judgments))
+        
+        # Load existing data with error handling
         existing_df = pd.DataFrame()
         if self.csv_file.exists():
             try:
                 existing_df = pd.read_csv(self.csv_file)
-                print(f"Loaded {len(existing_df)} existing records")
+                self.logger.info(f"Loaded {len(existing_df)} existing records from {self.csv_file}")
             except Exception as e:
-                print(f"Warning: Could not load existing CSV: {e}")
+                self.logger.warning(f"Could not load existing CSV: {str(e)}")
+                # Create backup of potentially corrupted file
+                if self.csv_file.exists():
+                    backup_file = self.csv_file.with_suffix('.csv.bak')
+                    try:
+                        shutil.copy2(self.csv_file, backup_file)
+                        self.logger.info(f"Created backup of CSV file at {backup_file}")
+                    except Exception as backup_err:
+                        self.logger.error(f"Failed to create backup: {str(backup_err)}")
         
         # Create new DataFrame
-        new_df = pd.DataFrame(judgments)
+        new_df = pd.DataFrame(processed_judgments)
         
-        # Combine data
+        # Combine data efficiently
         if not existing_df.empty:
-            # Ensure columns match
+            # Get all columns from both dataframes
             all_columns = set(existing_df.columns) | set(new_df.columns)
+            
+            # Fill missing columns with empty strings
             for col in all_columns:
                 if col not in existing_df.columns:
                     existing_df[col] = ""
                 if col not in new_df.columns:
                     new_df[col] = ""
             
+            # Concatenate dataframes
             combined_df = pd.concat([existing_df, new_df], ignore_index=True)
         else:
             combined_df = new_df
@@ -1487,86 +1726,551 @@ class FixedRajasthanHCScraper:
             combined_df = combined_df.drop_duplicates(subset=['judgment_id'], keep='last')
             after_dedup = len(combined_df)
             if before_dedup != after_dedup:
-                print(f"Removed {before_dedup - after_dedup} duplicate records")
+                self.logger.info(f"Removed {before_dedup - after_dedup} duplicate records")
+        
+        elapsed_time = time.time() - start_time
+        self.logger.info(f"CSV processing completed in {elapsed_time:.2f} seconds")
         
         # Ensure all required columns are present
         required_columns = [
-            'judgment_id', 'case_number', 'petitioner', 'respondent', 
-            'judgment_date', 'judge_name', 'pdf_url', 'pdf_path', 'pdf_filename',
-            'download_status', 'scraped_date', 'file_size_kb'
+            'judgment_id', 'case_number', 'case_title', 'judgment_date',
+            'pdf_url', 'pdf_filename', 'download_status', 'scraped_date',
+            'petitioner', 'respondent', 'judge_name', 'pdf_path', 'file_size_kb'
         ]
         
-        # Initialize missing columns with None
+        # Initialize missing columns with empty strings
         for col in required_columns:
             if col not in combined_df.columns:
-                combined_df[col] = None
+                combined_df[col] = ""
         
         # Reorder columns to have a consistent format
         available_columns = [col for col in required_columns if col in combined_df.columns]
         other_columns = [col for col in combined_df.columns if col not in required_columns]
         combined_df = combined_df[available_columns + other_columns]
         
-        # Save to CSV
-        combined_df.to_csv(self.csv_file, index=False)
-        print(f"Saved {len(judgments)} new judgments to {self.csv_file}")
-        print(f"Total judgments in database: {len(combined_df)}")
+        try:
+            # Save to CSV with optimized settings
+            combined_df.to_csv(self.csv_file, index=False)
+            self.logger.info(f"Successfully saved {len(combined_df)} records to {self.csv_file}")
+            self.logger.info(f"Added {len(judgments)} new judgments to database")
+            
+            # Update statistics
+            total_size_mb = combined_df['file_size_kb'].sum() / 1024 if 'file_size_kb' in combined_df.columns else 0
+            self.logger.info(f"Total PDF size: {total_size_mb:.2f} MB")
+            
+            # Return success
+            return True
+        except Exception as e:
+            self.logger.error(f"Error saving CSV file: {str(e)}")
+            import traceback
+            self.logger.debug(f"Stack trace: {traceback.format_exc()}")
+            return False
     
-    def run_incremental_scrape(self, days_back: int = 10):
-        """Run incremental scraping
+    def _solve_with_advanced_ocr(self, driver, attempt=0) -> str:
+        """Use the advanced OCR captcha solver"""
+        try:
+            # Create directory for captcha images
+            captcha_dir = Path("captcha_images")
+            captcha_dir.mkdir(exist_ok=True)
+            
+            # Generate unique filename for this attempt
+            timestamp = int(time.time())
+            captcha_filename = f"captcha_{timestamp}_{attempt}.png"
+            captcha_path = captcha_dir / captcha_filename
+            
+            # Find captcha image using multiple strategies
+            captcha_img = self._find_captcha_image(driver, attempt)
+            
+            if captcha_img:
+                # Save the captcha image
+                captcha_img.screenshot(str(captcha_path))
+                self.logger.info(f"Saved captcha image to {captcha_path}")
+                
+                # Solve with advanced OCR
+                captcha_text, confidence = self.captcha_solver.solve_captcha(str(captcha_path))
+                
+                if captcha_text and confidence > 0.5:
+                    self.logger.info(f"Captcha solved: {captcha_text} (confidence: {confidence:.2f})")
+                    self.metrics["captcha_success"] += 1
+                    return captcha_text
+                else:
+                    self.logger.warning(f"Low confidence captcha solution: {captcha_text} ({confidence:.2f})")
+            else:
+                self.logger.warning("Could not find captcha image")
+                
+            return ""
+        except Exception as e:
+            self.logger.error(f"Error in advanced captcha solving: {e}", exc_info=True)
+            return ""
+    
+    def _find_captcha_image(self, driver, attempt=0):
+        """Find captcha image using multiple strategies"""
+        # Multiple ways to find captcha image with expanded selectors
+        captcha_selectors = [
+            "//img[contains(@src, 'captcha')]",
+            "//img[contains(@src, 'Captcha')]",
+            "//img[contains(@src, 'CAPTCHA')]",
+            "//img[contains(@id, 'captcha')]",
+            "//img[contains(@id, 'Captcha')]",
+            "//img[contains(@class, 'captcha')]",
+            "//img[contains(@alt, 'captcha')]",
+            "//img[contains(@title, 'captcha')]",
+            "//img[contains(@name, 'captcha')]",
+            "//img[contains(@name, 'Captcha')]",
+            "//img[contains(@src, 'jcaptcha')]",
+            "//img[contains(@src, 'securimage')]",
+            "//img[contains(@src, 'random')]",
+            "//img[contains(@src, 'verify')]",
+            "//img[contains(@src, 'verification')]"
+        ]
         
-        This function implements the incremental daily download functionality as specified:
-        1. First run: Downloads all judgments from (today - days_back) to today
-        2. Subsequent runs: Downloads only new judgments that weren't downloaded before
-           - This includes judgments from the new day
-           - This also includes any judgments from previous days that were uploaded after our last run
-        """
-        today = datetime.now()
-        from_date_obj = today - timedelta(days=days_back)
+        # Rotate through different selector strategies based on attempt number
+        if attempt > 0:
+            # Reorder selectors to try different ones first on subsequent attempts
+            captcha_selectors = captcha_selectors[attempt % len(captcha_selectors):] + captcha_selectors[:attempt % len(captcha_selectors)]
         
-        from_date = from_date_obj.strftime("%d/%m/%Y")
-        to_date = today.strftime("%d/%m/%Y")
-        
-        print(f"Running incremental scrape from {from_date} to {to_date}")
-        print(f"Looking for judgments in the last {days_back} days")
-        
-        # Check if this is a subsequent run and we need to adjust the from_date
-        if self.downloaded_judgments.get("last_run_date"):
+        # Try standard selectors first
+        for selector in captcha_selectors:
             try:
-                # Calculate the date range for this run
-                last_run_date = datetime.fromisoformat(self.downloaded_judgments["last_run_date"])
-                print(f"Last run was on: {last_run_date.strftime('%d/%m/%Y')}")
-                
-                # For subsequent runs, we still need to check the full date range
-                # This ensures we catch any judgments that were added to the website after our last run
-                # but with earlier dates
-                print("This is a subsequent run - will check for new judgments in the entire date range")
-                
-                # We'll still use the same date range, but we'll skip judgments we've already downloaded
-                # based on their unique ID in the scrape_judgments function
+                elements = driver.find_elements(By.XPATH, selector)
+                if elements:
+                    for i, img in enumerate(elements):
+                        # On subsequent attempts, try different images if multiple match
+                        if i == (attempt % max(1, len(elements))):
+                            self.logger.info(f"Found captcha with selector: {selector} (image {i+1} of {len(elements)})")
+                            return img
             except Exception as e:
-                print(f"Error parsing last run date: {e}")
-        else:
-            print("This is the first run - will download all judgments in the date range")
+                self.logger.debug(f"Error with selector {selector}: {e}")
+                continue
         
-        judgments = self.scrape_judgments(from_date, to_date)
+        # If standard selectors failed, try proximity-based detection
+        try:
+            # Try to find captcha input field first
+            captcha_input = None
+            input_selectors = [
+                "//input[contains(@id, 'captcha') or contains(@id, 'Captcha')]",
+                "//input[contains(@name, 'captcha') or contains(@name, 'Captcha')]",
+                "//input[contains(@placeholder, 'captcha') or contains(@placeholder, 'enter text')]",
+                "//input[contains(@class, 'captcha')]"
+            ]
+            
+            for selector in input_selectors:
+                inputs = driver.find_elements(By.XPATH, selector)
+                if inputs:
+                    captcha_input = inputs[0]
+                    self.logger.info(f"Found captcha input with selector: {selector}")
+                    break
+            
+            if captcha_input:
+                # Look for images near the captcha input
+                # Get the location of the input field
+                input_location = captcha_input.location
+                
+                # Find all images on the page
+                all_images = driver.find_elements(By.TAG_NAME, "img")
+                
+                # Sort images by proximity to the input field
+                def distance(img):
+                    try:
+                        img_loc = img.location
+                        return ((img_loc['x'] - input_location['x'])**2 + 
+                                (img_loc['y'] - input_location['y'])**2)**0.5
+                    except:
+                        return 99999
+                
+                nearby_images = sorted(all_images, key=distance)
+                
+                # Use the closest image or the one corresponding to the attempt number
+                if nearby_images:
+                    img_index = min(attempt, len(nearby_images)-1)
+                    self.logger.info(f"Using proximity-based image detection (image {img_index+1} of {len(nearby_images)})")
+                    return nearby_images[img_index]
+            else:
+                # If we can't find the input field, try using small images as they're often captchas
+                small_images = []
+                for img in driver.find_elements(By.TAG_NAME, "img"):
+                    try:
+                        size = img.size
+                        if 20 <= size['width'] <= 200 and 10 <= size['height'] <= 80:
+                            small_images.append(img)
+                    except:
+                        continue
+                
+                if small_images:
+                    img_index = attempt % len(small_images)
+                    self.logger.info(f"Using size-based image detection (image {img_index+1} of {len(small_images)})")
+                    return small_images[img_index]
+        except Exception as e:
+            self.logger.error(f"Error in proximity detection: {e}")
         
-        if judgments:
-            self.save_to_csv(judgments)
-            print(f"Downloaded {len(judgments)} new judgments")
-        else:
-            print("No new judgments found")
+        return None
+    
+    def run_incremental_scrape(self, days_back: int = 10) -> List[Dict]:
+        """Run the scraper with incremental download functionality
         
-        # Update state
-        self.downloaded_judgments["last_run_date"] = today.isoformat()
-        self.save_state()
+        Args:
+            days_back: Number of days to look back from today
+            
+        Returns:
+            List of judgment dictionaries
+        """
+        # Start performance tracking
+        start_time = time.time()
+        self.metrics["start_time"] = start_time
         
-        print(f"\nScraping completed!")
-        print(f"- Total judgments downloaded in this run: {len(judgments)}")
-        print(f"- Files saved in: {self.download_dir}")
-        print(f"- CSV file: {self.csv_file}")
-        print(f"- PDFs saved in: {self.pdf_dir}")
+        # Calculate date range
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days_back)
         
-        return judgments
+        self.logger.info(f"Running incremental scrape from {start_date} to {end_date}")
+        
+        # Update last run date
+        self.downloaded_judgments["last_run_date"] = end_date.isoformat()
+        
+        # Initialize WebDriver
+        driver = None
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=self.chrome_options)
+            driver.set_page_load_timeout(30)  # Set page load timeout
+        except Exception as e:
+            self.logger.error(f"Failed to initialize WebDriver: {e}")
+            import traceback
+            self.logger.debug(f"Stack trace: {traceback.format_exc()}")
+            self.metrics["errors"] += 1
+            return []
+        
+        try:
+            # Navigate to the website with enhanced retry logic
+            max_page_load_attempts = 5  # Increased from 3 to 5
+            page_loaded = False
+            
+            for attempt in range(max_page_load_attempts):
+                try:
+                    # Clear cookies and cache before loading
+                    if attempt > 0:
+                        driver.delete_all_cookies()
+                        self.logger.info("Cleared cookies for fresh attempt")
+                    
+                    # Load the page with increased timeout
+                    self.logger.info(f"Attempting to load page: {self.base_url} (attempt {attempt+1}/{max_page_load_attempts})")
+                    driver.set_page_load_timeout(45)  # Increased timeout
+                    driver.get(self.base_url)
+                    
+                    # Take screenshot for debugging
+                    debug_path = os.path.join(os.getcwd(), "debug_screenshots")
+                    os.makedirs(debug_path, exist_ok=True)
+                    timestamp = int(time.time())
+                    screenshot_path = os.path.join(debug_path, f"page_load_attempt_{attempt+1}_{timestamp}.png")
+                    driver.save_screenshot(screenshot_path)
+                    self.logger.info(f"Saved page load screenshot to {screenshot_path}")
+                    
+                    # Try multiple selectors to determine if page loaded
+                    selectors_to_try = [(By.ID, "txtFromDate"), (By.ID, "txtToDate"), 
+                                       (By.XPATH, "//input[@type='text']"), 
+                                       (By.TAG_NAME, "body")]
+                    
+                    for selector in selectors_to_try:
+                        try:
+                            WebDriverWait(driver, 15).until(EC.presence_of_element_located(selector))
+                            self.logger.info(f"Page loaded successfully (detected element: {selector})")
+                            page_loaded = True
+                            break
+                        except Exception:
+                            continue
+                    
+                    if page_loaded:
+                        break
+                        
+                    self.logger.warning("Could not detect expected elements, but page might be partially loaded")
+                    # Check if we have any content
+                    if "Rajasthan High Court" in driver.page_source or len(driver.page_source) > 1000:
+                        self.logger.info("Page has content, proceeding with caution")
+                        page_loaded = True
+                        break
+                        
+                except TimeoutException:
+                    self.logger.warning(f"Timeout waiting for page to load (attempt {attempt+1}/{max_page_load_attempts})")
+                    if attempt < max_page_load_attempts - 1:
+                        self.logger.info("Retrying page load...")
+                        try:
+                            driver.execute_script("window.stop();")
+                        except Exception:
+                            pass
+                        time.sleep(2)  # Wait before retry
+                except WebDriverException as e:
+                    self.logger.error(f"WebDriver error: {e}")
+                    if "net::ERR_CONNECTION_TIMED_OUT" in str(e) and attempt < max_page_load_attempts - 1:
+                        self.logger.info("Connection timed out, retrying...")
+                        time.sleep(5)  # Longer wait for network issues
+                        continue
+                    break
+            
+            if not page_loaded:
+                self.logger.error("Failed to load page after multiple attempts")
+                self.metrics["errors"] += 1
+                return []
+            
+            # Set date range with explicit waits and JavaScript for reliable date entry
+            try:
+                # Wait for date inputs to be interactive
+                from_date_input = WebDriverWait(driver, 10).until(
+                    EC.element_to_be_clickable((By.ID, "txtFromDate"))
+                )
+                
+                # Use JavaScript to set date values directly - more reliable than send_keys
+                formatted_start_date = start_date.strftime("%d/%m/%Y")
+                driver.execute_script(f"document.getElementById('txtFromDate').value = '{formatted_start_date}'")
+                self.logger.info(f"Set from date to {formatted_start_date}")
+                
+                to_date_input = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "txtToDate"))
+                )
+                
+                formatted_end_date = end_date.strftime("%d/%m/%Y")
+                driver.execute_script(f"document.getElementById('txtToDate').value = '{formatted_end_date}'")
+                self.logger.info(f"Set to date to {formatted_end_date}")
+                
+                # Verify date fields were set correctly
+                actual_from_date = driver.execute_script("return document.getElementById('txtFromDate').value")
+                actual_to_date = driver.execute_script("return document.getElementById('txtToDate').value")
+                
+                if actual_from_date != formatted_start_date or actual_to_date != formatted_end_date:
+                    self.logger.warning(f"Date verification failed. Expected: {formatted_start_date}-{formatted_end_date}, Got: {actual_from_date}-{actual_to_date}")
+                    # Retry with traditional method if JavaScript approach failed
+                    from_date_input.clear()
+                    from_date_input.send_keys(formatted_start_date)
+                    to_date_input.clear()
+                    to_date_input.send_keys(formatted_end_date)
+                
+                # Set Reportable Judgment to YES
+                reportable_select = Select(WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable((By.ID, "ddlReportable"))
+                ))
+                reportable_select.select_by_visible_text("YES")
+            except NoSuchElementException as e:
+                self.logger.error(f"Element not found: {e}")
+                self.metrics["errors"] += 1
+                return []
+            except TimeoutException as e:
+                self.logger.error(f"Timeout waiting for form elements: {e}")
+                self.metrics["errors"] += 1
+                return []
+            
+            # Solve captcha with enhanced handling
+            captcha_solved = False
+            max_captcha_attempts = 5
+            captcha_attempt = 0
+            
+            while not captcha_solved and captcha_attempt < max_captcha_attempts:
+                self.logger.info(f"Captcha attempt {captcha_attempt + 1}/{max_captcha_attempts}")
+                
+                # Take screenshot of captcha for debugging
+                try:
+                    captcha_img = driver.find_element(By.ID, "imgCaptcha")
+                    if captcha_img:
+                        timestamp = int(time.time())
+                        debug_path = os.path.join(os.getcwd(), "captcha_debug")
+                        os.makedirs(debug_path, exist_ok=True)
+                        screenshot_path = os.path.join(debug_path, f"captcha_attempt_{captcha_attempt+1}_{timestamp}.png")
+                        captcha_img.screenshot(screenshot_path)
+                        self.logger.info(f"Saved captcha screenshot to {screenshot_path}")
+                except Exception as e:
+                    self.logger.warning(f"Could not save captcha screenshot: {e}")
+                
+                # Try OCR first
+                captcha_text = self.solve_captcha_ocr(driver, captcha_attempt)
+                
+                if not captcha_text:
+                    # If OCR fails, try manual input
+                    self.logger.info("Captcha OCR failed. Please solve the captcha manually:")
+                    captcha_text = input("Enter captcha text: ")
+                
+                # Ensure captcha text is properly formatted
+                if captcha_text:
+                    # Remove any whitespace and convert to uppercase (common captcha format)
+                    captcha_text = captcha_text.strip().upper()
+                    self.logger.info(f"Attempting captcha with text: {captcha_text}")
+                
+                # Enter captcha with retry logic
+                max_input_attempts = 3
+                input_success = False
+                
+                for input_attempt in range(max_input_attempts):
+                    try:
+                        # Wait for captcha input field to be ready
+                        captcha_input = WebDriverWait(driver, 5).until(
+                            EC.element_to_be_clickable((By.ID, "txtCaptcha"))
+                        )
+                        
+                        # Clear field and enter text
+                        captcha_input.clear()
+                        time.sleep(0.5)  # Small pause to ensure field is clear
+                        
+                        # Try both methods to ensure text entry works
+                        captcha_input.send_keys(captcha_text)
+                        
+                        # Verify text was entered correctly
+                        entered_text = captcha_input.get_attribute('value')
+                        if entered_text != captcha_text:
+                            self.logger.warning(f"Captcha text verification failed. Expected: {captcha_text}, Got: {entered_text}")
+                            # Try JavaScript as fallback
+                            driver.execute_script(f"document.getElementById('txtCaptcha').value = '{captcha_text}'")
+                        else:
+                            input_success = True
+                            break
+                    except Exception as e:
+                        self.logger.error(f"Error entering captcha (attempt {input_attempt+1}): {e}")
+                        time.sleep(1)
+                
+                if not input_success:
+                    self.logger.error("Failed to enter captcha text after multiple attempts")
+                    captcha_attempt += 1
+                    continue
+                
+                # Click search button with retry logic
+                try:
+                    search_button = WebDriverWait(driver, 5).until(
+                        EC.element_to_be_clickable((By.ID, "btnSearch"))
+                    )
+                    # Use JavaScript click for reliability
+                    driver.execute_script("arguments[0].click();", search_button)
+                    self.logger.info("Clicked search button")
+                    
+                    # Wait for results or error message with explicit wait
+                    WebDriverWait(driver, 10).until(
+                        lambda d: len(d.find_elements(By.XPATH, "//div[contains(text(), 'Invalid Captcha')]")) > 0 or 
+                                len(d.find_elements(By.ID, "grdJudgement")) > 0 or
+                                len(d.find_elements(By.XPATH, "//div[contains(text(), 'No Record Found')]")) > 0
+                    )
+                except TimeoutException:
+                    self.logger.warning("Timeout waiting for search results or error message")
+                    # Take screenshot for debugging
+                    debug_path = os.path.join(os.getcwd(), "debug_screenshots")
+                    os.makedirs(debug_path, exist_ok=True)
+                    timestamp = int(time.time())
+                    screenshot_path = os.path.join(debug_path, f"search_timeout_{timestamp}.png")
+                    driver.save_screenshot(screenshot_path)
+                    self.logger.info(f"Saved debug screenshot to {screenshot_path}")
+                    captcha_attempt += 1
+                    continue
+                except Exception as e:
+                    self.logger.error(f"Error during search: {e}")
+                    captcha_attempt += 1
+                    continue
+                
+                # Check if captcha was successful using multiple detection methods
+                error_elements = driver.find_elements(By.XPATH, "//div[contains(text(), 'Invalid Captcha') or contains(text(), 'incorrect captcha')]")
+                error_messages = driver.find_elements(By.XPATH, "//span[contains(text(), 'Invalid Captcha') or contains(text(), 'incorrect captcha')]")
+                
+                if not error_elements and not error_messages:
+                    # Check if results table or no records message is present
+                    results_table = driver.find_elements(By.ID, "grdJudgement")
+                    no_records = driver.find_elements(By.XPATH, "//div[contains(text(), 'No Record Found')]")
+                    
+                    if results_table or no_records:
+                        captcha_solved = True
+                        self.logger.info(f"Captcha solved successfully: {captcha_text}")
+                        self.metrics["captcha_success"] += 1
+                    else:
+                        self.logger.warning("No error message but also no results table found")
+                        captcha_attempt += 1
+                else:
+                    error_text = error_elements[0].text if error_elements else (error_messages[0].text if error_messages else "Unknown error")
+                    self.logger.warning(f"Captcha attempt {captcha_attempt + 1} failed: {error_text}")
+                    captcha_attempt += 1
+                    self.metrics["captcha_attempts"] += 1
+                    
+                    # Refresh captcha with multiple selector attempts
+                    refresh_success = False
+                    for selector_id in ["btnRefresh", "refresh", "captchaRefresh"]:
+                        try:
+                            refresh_button = WebDriverWait(driver, 3).until(
+                                EC.element_to_be_clickable((By.ID, selector_id))
+                            )
+                            refresh_button.click()
+                            self.logger.info(f"Refreshed captcha using selector: {selector_id}")
+                            refresh_success = True
+                            time.sleep(1)  # Wait for captcha to refresh
+                            break
+                        except Exception:
+                            continue
+                    
+                    if not refresh_success:
+                        # Try XPath selectors as fallback
+                        for xpath in ["//img[contains(@src, 'refresh')]", "//a[contains(@onclick, 'captcha')]"]:
+                            try:
+                                refresh_elements = driver.find_elements(By.XPATH, xpath)
+                                if refresh_elements:
+                                    refresh_elements[0].click()
+                                    self.logger.info(f"Refreshed captcha using XPath: {xpath}")
+                                    time.sleep(1)  # Wait for captcha to refresh
+                                    break
+                            except Exception:
+                                continue
+            
+            if not captcha_solved:
+                self.logger.error("Failed to solve captcha after multiple attempts. Exiting.")
+                self.metrics["errors"] += 1
+                return []
+            
+            # Wait for results table
+            try:
+                # Use shorter timeout with more specific condition
+                WebDriverWait(driver, 15).until(
+                    lambda d: len(d.find_elements(By.ID, "grdJudgement")) > 0 or 
+                              len(d.find_elements(By.XPATH, "//div[contains(text(), 'No Record Found')]")) > 0
+                )
+            except TimeoutException:
+                self.logger.warning("No results found or table not loaded.")
+                # Check if no records found
+                no_records_elements = driver.find_elements(By.XPATH, "//div[contains(text(), 'No Record Found')]")
+                if no_records_elements:
+                    self.logger.info("No records found for the specified date range.")
+                return []
+            
+            # Extract judgments
+            judgments = self.extract_judgments(driver)
+            
+            # Save to CSV if we have judgments
+            if judgments:
+                self.save_to_csv(judgments)
+            else:
+                self.logger.info("No judgments extracted, skipping CSV save")
+            
+            # Save state
+            self.save_state()
+            
+            # Update metrics
+            end_time = time.time()
+            self.metrics["end_time"] = end_time
+            self.metrics["total_judgments"] = len(judgments)
+            
+            # Log performance metrics
+            duration = end_time - start_time
+            judgments_per_second = len(judgments) / duration if duration > 0 else 0
+            self.logger.info(f"Scraping completed in {duration:.2f} seconds ({judgments_per_second:.2f} judgments/sec)")
+            self.logger.info(f"Total judgments: {self.metrics['total_judgments']}")
+            self.logger.info(f"New judgments: {self.metrics['new_judgments']}")
+            self.logger.info(f"Captcha success rate: {self.metrics['captcha_success']}/{self.metrics['captcha_attempts']}")
+            self.logger.info(f"Download success rate: {self.metrics['download_success']}/{self.metrics['download_success'] + self.metrics['download_failed']}")
+            
+            return judgments
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected error: {e}")
+            import traceback
+            self.logger.debug(f"Stack trace: {traceback.format_exc()}")
+            self.metrics["errors"] += 1
+            return []
+        finally:
+            # Close the browser
+            if driver:
+                try:
+                    driver.quit()
+                except Exception as e:
+                    self.logger.error(f"Error closing browser: {e}")
+                    import traceback
+                    self.logger.debug(f"Stack trace: {traceback.format_exc()}")
 
 # Bonus: Supreme Court of India Captcha Solver
 class SCICaptchaSolver:

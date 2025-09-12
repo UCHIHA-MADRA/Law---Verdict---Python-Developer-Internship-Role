@@ -1,0 +1,81 @@
+2025-09-11 18:05:23,054 - RajasthanHCScraper - INFO - Loaded state with 0 previously downloaded judgments
+2025-09-11 18:05:23,055 - RajasthanHCScraper - WARNING - Advanced OCR Captcha Solver not available
+2025-09-11 18:05:23,056 - RajasthanHCScraper - INFO - Running incremental scrape from 2025-09-01 to 2025-09-11
+2025-09-11 18:05:23,056 - WDM - INFO - ====== WebDriver manager ======
+2025-09-11 18:05:25,940 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:05:26,855 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:05:27,547 - WDM - INFO - There is no [win64] chromedriver "140.0.7339.82" for browser google-chrome "140.0.7339" in cache
+2025-09-11 18:05:27,549 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:05:29,022 - WDM - INFO - WebDriver version 140.0.7339.82 selected
+2025-09-11 18:05:29,032 - WDM - INFO - Modern chrome version https://storage.googleapis.com/chrome-for-testing-public/140.0.7339.82/win32/chromedriver-win32.zip
+2025-09-11 18:05:29,033 - WDM - INFO - About to download new driver from https://storage.googleapis.com/chrome-for-testing-public/140.0.7339.82/win32/chromedriver-win32.zip
+2025-09-11 18:05:29,507 - WDM - INFO - Driver downloading response is 200
+2025-09-11 18:05:32,237 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:05:33,836 - WDM - INFO - Driver has been saved in cache [C:\Users\u\.wdm\drivers\chromedriver\win64\140.0.7339.82]
+2025-09-11 18:06:04,587 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 1/3)
+2025-09-11 18:06:04,588 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:06:22,137 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 2/3)
+2025-09-11 18:06:22,137 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:06:38,206 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 3/3)
+2025-09-11 18:06:38,207 - RajasthanHCScraper - ERROR - Failed to load page after multiple attempts
+2025-09-11 18:08:58,042 - RajasthanHCScraper - INFO - Loaded state with 0 previously downloaded judgments
+2025-09-11 18:08:58,043 - RajasthanHCScraper - WARNING - Advanced OCR Captcha Solver not available
+2025-09-11 18:08:58,044 - RajasthanHCScraper - INFO - Running incremental scrape from 2025-09-01 to 2025-09-11
+2025-09-11 18:08:58,044 - WDM - INFO - ====== WebDriver manager ======
+2025-09-11 18:08:59,196 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:09:00,041 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:09:00,602 - WDM - INFO - Driver [C:\Users\u\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-11 18:09:23,851 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 1/3)
+2025-09-11 18:09:23,851 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:09:39,965 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 2/3)
+2025-09-11 18:09:39,966 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:09:56,571 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 3/3)
+2025-09-11 18:09:56,573 - RajasthanHCScraper - ERROR - Failed to load page after multiple attempts
+2025-09-11 18:10:53,275 - RajasthanHCScraper - INFO - Loaded state with 0 previously downloaded judgments
+2025-09-11 18:10:53,276 - RajasthanHCScraper - WARNING - Advanced OCR Captcha Solver not available
+2025-09-11 18:10:53,277 - RajasthanHCScraper - INFO - Running incremental scrape from 2025-09-01 to 2025-09-11
+2025-09-11 18:10:53,277 - WDM - INFO - ====== WebDriver manager ======
+2025-09-11 18:10:54,336 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:10:55,229 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:10:55,948 - WDM - INFO - Driver [C:\Users\u\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-11 18:11:17,379 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 1/3)
+2025-09-11 18:11:17,380 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:11:33,467 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 2/3)
+2025-09-11 18:11:33,467 - RajasthanHCScraper - INFO - Retrying page load...
+2025-09-11 18:11:49,664 - RajasthanHCScraper - WARNING - Timeout waiting for page to load (attempt 3/3)
+2025-09-11 18:11:49,664 - RajasthanHCScraper - ERROR - Failed to load page after multiple attempts
+2025-09-11 18:12:43,056 - RajasthanHCScraper - INFO - Loaded state with 0 previously downloaded judgments
+2025-09-11 18:12:43,056 - RajasthanHCScraper - WARNING - Advanced OCR Captcha Solver not available
+2025-09-11 18:12:43,057 - RajasthanHCScraper - INFO - Running incremental scrape from 2025-09-01 to 2025-09-11
+2025-09-11 18:12:43,057 - WDM - INFO - ====== WebDriver manager ======
+2025-09-11 18:12:44,006 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:12:44,669 - WDM - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-11 18:12:45,309 - WDM - INFO - Driver [C:\Users\u\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-11 18:12:46,826 - RajasthanHCScraper - INFO - Attempting to load page: https://hcraj.nic.in/cishcraj-jdp/JudgementFilters/ (attempt 1/5)
+2025-09-11 18:12:50,865 - RajasthanHCScraper - INFO - Saved page load screenshot to C:\Users\u\Desktop\Law---Verdict---Python-Developer-Internship-Role\debug_screenshots\page_load_attempt_1_1757639570.png
+2025-09-11 18:13:21,313 - RajasthanHCScraper - INFO - Page loaded successfully (detected element: ('xpath', "//input[@type='text']"))
+2025-09-11 18:13:31,675 - RajasthanHCScraper - ERROR - Timeout waiting for form elements: Message: 
+Stacktrace:
+	GetHandleVerifier [0x0x10ad2a3+66419]
+	GetHandleVerifier [0x0x10ad2e4+66484]
+	(No symbol) [0x0xe84bd3]
+	(No symbol) [0x0xece958]
+	(No symbol) [0x0xececfb]
+	(No symbol) [0x0xf15152]
+	(No symbol) [0x0xef1064]
+	(No symbol) [0x0xf128a1]
+	(No symbol) [0x0xef0e16]
+	(No symbol) [0x0xec25ce]
+	(No symbol) [0x0xec34a4]
+	GetHandleVerifier [0x0x12f5ee3+2461619]
+	GetHandleVerifier [0x0x12f0f66+2441270]
+	GetHandleVerifier [0x0x10d6242+234258]
+	GetHandleVerifier [0x0x10c6208+168664]
+	GetHandleVerifier [0x0x10cd1ad+197245]
+	GetHandleVerifier [0x0x10b55f8+100040]
+	GetHandleVerifier [0x0x10b5792+100450]
+	GetHandleVerifier [0x0x109f74a+10266]
+	BaseThreadInitThunk [0x0x7540fcc9+25]
+	RtlGetAppContainerNamedObjectPath [0x0x772c82ae+286]
+	RtlGetAppContainerNamedObjectPath [0x0x772c827e+238]
+

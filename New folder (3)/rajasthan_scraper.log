@@ -1,0 +1,32 @@
+2025-09-13 05:38:57,139 - INFO - ====== WebDriver manager ======
+2025-09-13 05:38:57,971 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 05:38:58,931 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 05:39:00,367 - INFO - Driver [C:\Users\prabh\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-13 05:50:15,637 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)': /session/e088a799951d3ac1f40de1de13c620a0/screenshot
+2025-09-13 05:50:21,758 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x0000022841E27C80>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /session/e088a799951d3ac1f40de1de13c620a0
+2025-09-13 05:50:38,975 - INFO - ====== WebDriver manager ======
+2025-09-13 05:50:39,742 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 05:50:42,316 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 05:50:44,207 - INFO - Driver [C:\Users\prabh\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-13 05:52:07,589 - INFO - Extracting judgment data...
+2025-09-13 05:52:07,639 - INFO - Detected 'no records' text on page.
+2025-09-13 05:52:09,953 - INFO - Scraped 0 judgments
+2025-09-13 06:07:31,133 - ERROR - Failed to initialize PaddleOCR: Unknown argument: cls
+2025-09-13 06:07:31,134 - ERROR - Failed to initialize PaddleOCR: Unknown argument: cls
+2025-09-13 06:07:31,135 - ERROR - Failed to initialize PaddleOCR: Unknown argument: cls
+2025-09-13 06:07:31,989 - INFO - ====== WebDriver manager ======
+2025-09-13 06:07:33,103 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 06:07:33,951 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 06:07:35,186 - INFO - Driver [C:\Users\prabh\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-13 06:12:13,808 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)': /session/6b9e108c79838d5b793576ee2de89714/screenshot
+2025-09-13 06:12:30,023 - ERROR - Failed to initialize PaddleOCR: Unknown argument: det
+2025-09-13 06:12:30,024 - ERROR - Failed to initialize PaddleOCR: Unknown argument: det
+2025-09-13 06:12:30,025 - ERROR - Failed to initialize PaddleOCR: Unknown argument: det
+2025-09-13 06:12:30,927 - INFO - ====== WebDriver manager ======
+2025-09-13 06:12:31,797 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 06:12:32,353 - INFO - Get LATEST chromedriver version for google-chrome
+2025-09-13 06:12:33,014 - INFO - Driver [C:\Users\prabh\.wdm\drivers\chromedriver\win64\140.0.7339.82\chromedriver-win32/chromedriver.exe] found in cache
+2025-09-13 06:14:04,719 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)': /session/e8b62c1c6995c0962eb4810eeafe56bc/screenshot
+2025-09-13 06:14:10,821 - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B95AE7CB90>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /session/e8b62c1c6995c0962eb4810eeafe56bc
+2025-09-13 06:14:14,930 - WARNING - Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B95AE7CB60>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /session/e8b62c1c6995c0962eb4810eeafe56bc
+2025-09-13 06:14:19,001 - WARNING - Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001B95AE7C920>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it')': /session/e8b62c1c6995c0962eb4810eeafe56bc
